@@ -1,0 +1,215 @@
+**Autentication**
+
+👉 Below is a working, end-to-end explanation of how Java Spring Boot + JWT + Amazon Cognito + API Gateway + Authorizer integrate in a real production-style flow, using your API Gateway setup as context.
+
+I’ll keep this practical and implementation-focused, not just theory.
+
+User / Client
+   |
+   | 1. Login (username/password)
+   v
+Amazon Cognito User Pool
+   |
+   | 2. JWT Tokens (Access, ID, Refresh)
+   v
+Client (stores tokens)
+   |
+   | 3. API call with Authorization: Bearer <AccessToken>
+   v
+API Gateway
+   |
+   | 4. Cognito Authorizer
+   |    - Validate signature
+   |    - Validate exp
+   |    - Validate issuer
+   v
+ALB (via VPC Link)
+   |
+   | 5. Forward headers + claims
+   v
+Spring Boot App
+   |
+   | 6. Business logic
+   v
+Response
+
+2️⃣ Cognito – Token Generation (How JWT is Created)
+
+🔹 Login Flow
+
+Your client calls Cognito:
+👉 POST https://cognito-idp.<region>.amazonaws.com/
+With:
+InitiateAuth, USERNAME/PASSWORD ,ClientId
+
+🔹 Cognito returns 3 tokens:
+Token	Purpose
+ID Token	User identity (used by frontend)
+Access Token	Authorization (used for APIs)
+Refresh Token	Get new tokens without re-login
+
+🔹 JWT Structure
+
+All Cognito tokens are JWTs:
+header.payload.signature
+
+Decoded payload example:
+
+{
+  "sub": "uuid",
+  "iss": "https://cognito-idp.ca-central-1.amazonaws.com/ca-central-1_XXXX",
+  "client_id": "abcd1234",
+  "token_use": "access",
+  "scope": "openid profile",
+  "exp": 1715000000,
+  "username": "john.doe"
+}
+
+
+✔ Signed using RS256
+✔ Public keys available via JWKS endpoint
+
+👉 https://cognito-idp.ca-central-1.amazonaws.com/<userPoolId>/.well-known/jwks.json
+
+3️⃣ Client → API Gateway (How Token Is Sent)
+
+Client calls your API:
+PUT /user/123/attributes
+With header:
+Authorization: Bearer eyJraWQiOiJLT...
+
+4️⃣ API Gateway + Authorizer (Token Validation)
+
+👉 You typically use Cognito User Pool Authorizer (recommended).
+
+🔹 What the Authorizer Does Automatically
+
+When request hits API Gateway:
+
+Extracts token from:
+
+Authorization: Bearer <JWT>
+
+Verifies:
+
+Token signature (using Cognito public key)
+Token expiration (exp)
+Issuer (iss)
+Token type (token_use = access)
+Audience / client id
+
+If valid → request proceeds
+
+If invalid → 401 Unauthorized (Lambda not called)
+
+6️⃣ Spring Boot – Token Validation (Two Approaches)
+🔹 Approach 1 (Best Practice)
+
+👉 API Gateway validates token
+👉 Spring Boot only reads claims
+
+In Spring Boot
+Claims arrive as HTTP headers:
+
+x-amzn-oidc-data
+x-amzn-oidc-identity
+
+Or forwarded as:
+X-User-Id
+X-Username
+
+👉 No JWT validation needed in app.
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+👉 HTTP API + VPC Link → NLB only
+
+**REST API:**
+
+Cognito Authorizer
+Custom Lambda Authorizer
+API keys + usage plans
+Request validation
+Resource policies
+Transform headers
+Modify payloads
+Validate schemas
+Block invalid requests before backend
+
+**HTTP API:**
+
+Cognito Authorizer
+JWT Authorizer
+IAM auth
+❌ No custom Lambda authorizer logic (classic)
+Pass-through only
+Backend must handle everything
+
+9️⃣ Migration Consideration
+
+❌ REST → HTTP is NOT trivial if you use:
+
+Mapping templates
+Usage plans
+ALB with VPC Link
+Custom authorizers
+
+
+🧩 How This Ties into Spring Security Filter Chain (JWT Token validation at Spring Boot)
+HTTP Request
+   ↓
+AwsCognitoJwtAuthenticationFilter  ← extracts JWT (OncePerRequestFilter) --> calls method protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+   ↓
+CognitoJwtAuthenticationProvider   ← invokes processor
+   ↓
+ConfigurableJWTProcessor           ← validates JWT (Nimbus) 
+   jwtClaimsSet = configurableJWTProcessor.process(idToken, null);
+   String username = jwtClaimsSet.getClaims().get(jwtConfiguration.getUserNameField()).toString();
+	 claimSetUserMap.put(username, jwtClaimsSet);
+	 isIssuedCorrectly(jwtClaimsSet, jwtConfiguration.getCognitoIdentityPoolUrl());
+   ↓
+SecurityContextHolder              ← authenticated
+
+If validation fails:
+401 Unauthorized
+
+👉 access_token exmaple:
+{
+  "sub": "81e039a5-357b-43c1-88ad-1e8afe887b92",
+  "event_id": "f1322268-10c5-4836-ac84-fe032a003ef9",
+  "token_use": "access",
+  "scope": "aws.cognito.signin.user.admin",
+  "auth_time": 1768814027,
+  "iss": "https://cognito-idp.ca-central-1.amazonaws.com/ca-central-1_ppqL98N2N",
+  "exp": 1768817627,
+  "iat": 1768814027,
+  "jti": "12edfde5-715d-4ca4-b273-f850d65d3f01",
+  "client_id": "5flqb7foprr9emnv6lk33crsg2",
+  "username": "papuldas"
+}
+
+🔄 Real Refresh Flow (Exact)
+Client → /renewToken
+   ↓
+Spring Security Context (ID token)
+   ↓
+Send ID token to **/saml2/renewToken**
+   ↓
+Auth service:
+   ├─ validates ID token
+   ├─ extracts user / sub
+   ├─ fetches refresh token from DB
+   ├─ calls Cognito oauth2/token
+   └─ returns new tokens
+
+👉 In My Project (CATS) following is happening
+Cognito issues ID tokens, and the Spring Boot application validates those ID tokens locally using a JWT processor (Nimbus), without calling Cognito at runtime.
+
+Cognito User Pool
+   └─ Issues ID Token (JWT)
+        ↓
+Client
+   └─ Sends ID Token
+        ↓
+Spring Boot API
+   └─ Validates JWT locally (JWKS)
+

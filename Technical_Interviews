@@ -213,3 +213,93 @@ Client
 Spring Boot API
    └─ Validates JWT locally (JWKS)
 
+👉 For Getting Authorization code
+
+https://ap-south-14opmjtf9v.auth.ap-south-1.amazoncognito.com/oauth2/authorize
+?response_type=code
+&client_id=5or73icjoef43c1qs75en0ntqn
+&redirect_uri=https://d84l1y8p4kdic.cloudfront.net
+&scope=openid+email+phone
+
+👉 Same Code will be passed in below to get JWT token
+
+curl --location 'https://ap-south-14opmjtf9v.auth.ap-south-1.amazoncognito.com/oauth2/token' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Authorization: Basic NW9yNzNpY2pvZWY0M2MxcXM3NWVuMG50cW46dGJicm1oNzFpNjFrZTdmdG0wcWRwcWZwZjFxYjc2bXBwYWo4M3MzYTBidGphNHBxbzg=' \
+--header 'Cookie: XSRF-TOKEN=894b2d01-f6f5-4cab-b388-261193512d5b' \ 
+--data-urlencode 'grant_type=authorization_code' \
+--data-urlencode 'code=b60ba969-11e9-4f3a-a25a-96520ba15114' \ ✅
+--data-urlencode 'redirect_uri=https://d84l1y8p4kdic.cloudfront.net'  🧩 Must be same as used in /authorize
+
+
+What Would Happen If Code Were Reusable? ❌
+
+Imagine this flow if the code could be reused:
+
+User logs in
+
+Cognito redirects with:
+
+?code=ABC123
+
+Your backend exchanges it for tokens ✅
+
+🧩Attacker steals the same code (logs, browser history, proxy, network)
+
+Attacker reuses:
+
+code=ABC123
+
+
+Attacker gets valid access + ID tokens
+
+💥 Full account compromise
+
+Single-use stops step 4 → 6.
+
+OAuth Threat Model (Why It Exists)
+
+OAuth assumes:
+
+Browsers are not fully trusted
+
+URLs can leak via:
+
+Browser history,Referrer headers,Logs,Proxies
+
+Redirect mishandling
+
+So OAuth splits authentication into two steps:
+
+Step	Where
+Authorization Code	Browser (unsafe)
+Token Exchange	Backend (secure)
+
+🧩 The code is a temporary bridge, not a credential.
+
+How Cognito Enforces This
+
+Internally Cognito:
+Stores each authorization code
+Marks it as:
+Used OR
+Expired (~5 minutes)
+
+🧩 When reused: (/token give below response with 400)
+{
+  "error": "invalid_grant"
+}
+
+
+This is intentional and required by RFC 6749.
+
+Why Tokens CAN Be Reused but Codes Cannot
+Item	Reusable?	Why
+Authorization Code	❌ No	Browser-exposed
+Access Token	✅ Yes (until exp)	Signed, scoped
+ID Token	✅ Yes (until exp)	Identity assertion
+Refresh Token	✅ Yes	Stored securely server-side
+
+REST API + Cognito authorizer = ID token ✅
+HTTP API + JWT authorizer = Access token ✅
+

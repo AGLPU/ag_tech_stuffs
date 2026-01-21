@@ -303,3 +303,42 @@ Refresh Token	✅ Yes	Stored securely server-side
 REST API + Cognito authorizer = ID token ✅
 HTTP API + JWT authorizer = Access token ✅
 
+---------------------------------------------------------------------------
+🧩 CORS
+
+Frontend (Browser)                          API Server
+https://frontend.com                        https://api.example.com
+       |                                           |
+       | ---- OPTIONS /data (preflight) --------->|
+       |                                           |
+       |<--- 200 OK + Access-Control-Allow-Origin *--|
+       |                                           |
+       | ---- GET /data (actual request) -------->|
+       |                                           |
+       |<--- 200 OK + JSON data ------------------|
+
+Step-by-step explanation:
+
+Preflight request (OPTIONS)
+
+Browser asks:
+"Can I send a GET/POST with these headers to your API?"
+
+API responds with:
+
+Access-Control-Allow-Origin: https://frontend.com
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Authorization, Content-Type
+
+Actual request (GET/POST)
+Browser sends the real request with token/headers.
+
+API responds with the actual data and includes Access-Control-Allow-Origin in response.
+
+Browser allows response
+
+Only if CORS headers match → JS can access response.
+If headers missing → browser blocks the response, frontend sees CORS error.
+
+-------------------------------------------------------------------------------------------------------------------
+
